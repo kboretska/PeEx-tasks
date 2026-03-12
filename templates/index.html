@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Server Load Simulator</title>
+    <style>
+        /* Base styles with modern sans-serif fonts */
+        body { 
+            font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; 
+            margin: 0; 
+            display: flex; 
+            justify-content: center; 
+            align-items: center; 
+            min-height: 100vh; 
+            background: #f0f2f5; 
+            color: #1a1a1a;
+        }
+
+        /* Container using CSS Grid for modern layout */
+        .container { 
+            background: #ffffff; 
+            padding: 40px; 
+            border-radius: 20px; 
+            box-shadow: 0 15px 35px rgba(0,0,0,0.08); 
+            text-align: center; 
+            width: 100%; 
+            max-width: 600px;
+        }
+
+        h1 { font-weight: 700; color: #333; margin-bottom: 30px; }
+
+        .load-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            margin-top: 20px;
+        }
+
+        /* Card styles for each load type */
+        .load-card {
+            background: #fdfdfd;
+            border: 2px solid #e1e8ed;
+            border-radius: 12px;
+            padding: 20px;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+
+        .load-card:hover {
+            transform: translateY(-8px);
+            box-shadow: 0 8px 16px rgba(0,0,0,0.1);
+        }
+
+        /* Colored top-border for each card */
+        .load-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 6px;
+        }
+
+        .low::before { background: #66bb6a; }
+        .med::before { background: #ffca28; }
+        .high::before { background: #ef5350; }
+
+        .load-title { font-size: 1.3rem; font-weight: 600; margin-bottom: 10px; }
+        .load-desc { font-size: 0.9rem; color: #666; line-height: 1.4; }
+
+        /* Modern, responsive status bar */
+        #status { 
+            margin-top: 30px; 
+            padding: 15px; 
+            border-radius: 8px; 
+            background: #e1f5fe; 
+            color: #01579b; 
+            display: none; 
+            font-size: 1rem;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Server Load Simulator</h1>
+        <div class="load-grid">
+            <div class="load-card low" onclick="startLoad(1, 5)">
+                <div class="load-title">Low Load</div>
+                <div class="load-desc">1 Core <br> 5 Seconds</div>
+            </div>
+            <div class="load-card med" onclick="startLoad(2, 10)">
+                <div class="load-title">Medium Load</div>
+                <div class="load-desc">2 Cores <br> 10 Seconds</div>
+            </div>
+            <div class="load-card high" onclick="startLoad(0, 15)">
+                <div class="load-title">MAX LOAD</div>
+                <div class="load-desc">ALL Cores <br> 15 Seconds</div>
+            </div>
+        </div>
+        <div id="status"></div>
+    </div>
+
+    <script>
+        // Clean JS function using moderne fetch()
+        function startLoad(cores, duration) {
+            const statusDiv = document.getElementById('status');
+            statusDiv.innerText = `Starting load on ${cores === 0 ? 'ALL' : cores} cores...`;
+            statusDiv.style.display = 'block';
+
+            fetch('/start', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({cores: cores, duration: duration})
+            }).then(res => res.json()).then(data => {
+                statusDiv.innerText = data.status;
+            }).catch(err => {
+                statusDiv.innerText = "Error: Connection lost.";
+                statusDiv.style.background = "#ffcdd2";
+                statusDiv.style.color = "#c62828";
+            });
+        }
+    </script>
+</body>
+</html>
