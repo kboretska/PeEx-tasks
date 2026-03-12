@@ -1,0 +1,50 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # 1. Validation & Build Stage
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Lint with flake8 (Test Stage)
+        run: |
+          pip install flake8
+          flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
+
+      - name: Build Docker Image
+        run: docker build -t ghcr.io/${{ github.repository }}:latest .
+
+  # 2. Deploy to Development
+  deploy-dev:
+    needs: build-and-test
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    environment: development
+    steps:
+      - name: Deploy to Dev
+        run: echo "Deploying to Dev environment (Simulated on port 5001)"
+        # Тут зазвичай йде SSH-команда на ваш сервер або оновлення K8s
+
+  # 3. Deploy to Production (with Promotion Logic)
+  deploy-prod:
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    environment: production # Тут ми налаштуємо Manual Approval в GitHub
+    steps:
+      - name: Deploy to Prod
+        run: echo "Deploying to Production environment (Simulated on port 80)"
