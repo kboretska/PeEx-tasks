@@ -41,7 +41,6 @@ jobs:
           docker build -t ghcr.io/kboretska/peex-tasks:latest .
           docker push ghcr.io/kboretska/peex-tasks:latest
 
-  # 2. Deploy to Development
   deploy-dev:
     needs: build-and-test
     runs-on: ubuntu-latest
@@ -61,7 +60,6 @@ jobs:
             sudo docker rm load-app || true
             sudo docker run -d -p 5000:5000 --name load-app ghcr.io/kboretska/peex-tasks:latest
 
-  # 3. Deploy to Production
   deploy-prod:
     needs: deploy-dev
     runs-on: ubuntu-latest
