@@ -86,7 +86,7 @@ jobs:
     if: github.event_name == 'push'
     needs:
         - build-and-push
-        - smoke-test-dev
+
     runs-on: ubuntu-latest
     environment: development
 
@@ -123,7 +123,9 @@ jobs:
   deploy-prod:
     name: Deploy to Production
     if: github.event_name == 'push'
-    needs: smoke-test-dev
+    needs: 
+            - build-and-push
+            - smoke-test-dev
     runs-on: ubuntu-latest
     environment: production
 
