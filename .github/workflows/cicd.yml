@@ -84,7 +84,9 @@ jobs:
   deploy-dev:
     name: Deploy to Development
     if: github.event_name == 'push'
-    needs: build-and-push
+    needs:
+        - build-and-push
+        - smoke-test-dev
     runs-on: ubuntu-latest
     environment: development
 
