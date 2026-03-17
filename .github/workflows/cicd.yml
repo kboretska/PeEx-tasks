@@ -111,6 +111,7 @@ jobs:
     if: github.event_name == 'push'
     needs: deploy-dev
     runs-on: ubuntu-latest
+    environment: development
 
     steps:
       - name: Check Dev health endpoint
