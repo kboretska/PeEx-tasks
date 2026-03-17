@@ -37,7 +37,7 @@ jobs:
 
       - name: Run tests
         run: |
-          pytest -v
+          PYTHONPATH=. pytest -v
 
       - name: Build Docker image for validation
         run: |
