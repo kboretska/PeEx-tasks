@@ -2,51 +2,94 @@ name: CI/CD Pipeline
 
 on:
   push:
-    branches: [ main ]
+    branches:
+      - main
   pull_request:
-    branches: [ main ]
+    branches:
+      - main
+
+env:
+  IMAGE_NAME: ghcr.io/kboretska/peex-tasks
 
 jobs:
-  # 1. Validation, Build & Push Stage
-  build-and-test:
+  validate:
+    name: Validate, Lint and Test
     runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      packages: write
+
     steps:
-      - uses: actions/checkout@v3
+      - name: Checkout source code
+        uses: actions/checkout@v4
 
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Lint with flake8
         run: |
-          pip install flake8
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+          pip install flake8 pytest
+
+      - name: Run lint
+        run: |
           flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
 
+      - name: Run tests
+        run: |
+          pytest -v
+
+      - name: Build Docker image for validation
+        run: |
+          docker build -t peex-tasks:test .
+
+  build-and-push:
+    name: Build and Push Artifact
+    if: github.event_name == 'push'
+    needs: validate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+
+    outputs:
+      image_tag: ${{ steps.meta.outputs.image_tag }}
+
+    steps:
+      - name: Checkout source code
+        uses: actions/checkout@v4
+
+      - name: Set image tag
+        id: meta
+        run: echo "image_tag=${GITHUB_SHA}" >> $GITHUB_OUTPUT
+
       - name: Log in to GHCR
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and Push Docker Image
+      - name: Build Docker image
         run: |
-          docker build -t ghcr.io/kboretska/peex-tasks:latest .
-          docker push ghcr.io/kboretska/peex-tasks:latest
+          docker build \
+            -t $IMAGE_NAME:latest \
+            -t $IMAGE_NAME:${GITHUB_SHA} .
+
+      - name: Push Docker images
+        run: |
+          docker push $IMAGE_NAME:latest
+          docker push $IMAGE_NAME:${GITHUB_SHA}
 
   deploy-dev:
-    needs: build-and-test
+    name: Deploy to Development
+    if: github.event_name == 'push'
+    needs: build-and-push
     runs-on: ubuntu-latest
     environment: development
+
     steps:
-      - name: Deploy to AWS Dev via SSH
+      - name: Deploy application to Dev server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.AWS_DEV_IP }}
@@ -55,17 +98,34 @@ jobs:
           port: 22
           script: |
             echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            sudo docker pull ghcr.io/kboretska/peex-tasks:latest
-            sudo docker stop load-app || true
-            sudo docker rm load-app || true
-            sudo docker run -d -p 5000:5000 --name load-app ghcr.io/kboretska/peex-tasks:latest
+            sudo docker pull ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+            sudo docker stop load-app-dev || true
+            sudo docker rm load-app-dev || true
+            sudo docker run -d \
+              --name load-app-dev \
+              -p 5000:5000 \
+              ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
 
-  deploy-prod:
+  smoke-test-dev:
+    name: Smoke Test Development
+    if: github.event_name == 'push'
     needs: deploy-dev
     runs-on: ubuntu-latest
-    environment: production
+
     steps:
-      - name: Deploy to AWS Prod via SSH
+      - name: Check Dev health endpoint
+        run: |
+          curl --fail http://${{ secrets.AWS_DEV_IP }}:5000/health
+
+  deploy-prod:
+    name: Deploy to Production
+    if: github.event_name == 'push'
+    needs: smoke-test-dev
+    runs-on: ubuntu-latest
+    environment: production
+
+    steps:
+      - name: Deploy application to Prod server
         uses: appleboy/ssh-action@v1.0.3
         with:
           host: ${{ secrets.AWS_PROD_IP }}
@@ -74,7 +134,21 @@ jobs:
           port: 22
           script: |
             echo "${{ secrets.GITHUB_TOKEN }}" | sudo docker login ghcr.io -u ${{ github.actor }} --password-stdin
-            sudo docker pull ghcr.io/kboretska/peex-tasks:latest
-            sudo docker stop load-app || true
-            sudo docker rm load-app || true
-            sudo docker run -d -p 80:5000 --name load-app ghcr.io/kboretska/peex-tasks:latest
+            sudo docker pull ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+            sudo docker stop load-app-prod || true
+            sudo docker rm load-app-prod || true
+            sudo docker run -d \
+              --name load-app-prod \
+              -p 80:5000 \
+              ${{ env.IMAGE_NAME }}:${{ needs.build-and-push.outputs.image_tag }}
+
+  smoke-test-prod:
+    name: Smoke Test Production
+    if: github.event_name == 'push'
+    needs: deploy-prod
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check Prod health endpoint
+        run: |
+          curl --fail http://${{ secrets.AWS_PROD_IP }}/health
