@@ -152,6 +152,7 @@ jobs:
     if: github.event_name == 'push'
     needs: deploy-prod
     runs-on: ubuntu-latest
+    environment: production
 
     steps:
       - name: Check Prod health endpoint
