@@ -1,0 +1,18 @@
+# Copy to terraform.tfvars (not committed) and adjust:
+#   copy terraform.tfvars.example terraform.tfvars
+#
+# Or pass the SSH key without a file:
+#   set TF_VAR_ssh_public_key=@path\to\id_rsa.pub   (PowerShell: Get-Content file | as env)
+#   export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa.pub)"
+
+location   = "westeurope"
+name_prefix = "peex-tasks"
+environment = "dev"
+
+# Required: your SSH public key (single line)
+ssh_public_key = "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC...REPLACE_ME"
+
+# Optional: lock SSH to your public IP for production
+# admin_source_address_prefix = "203.0.113.10/32"
+
+vm_size = "Standard_B2s"

@@ -87,17 +87,17 @@
     <div class="container">
         <h1>Server Load Simulator</h1>
         <div class="load-grid">
-            <div class="load-card low" onclick="startLoad(1, 5)">
+            <div class="load-card low" onclick="startLoad(1, 5, 1)">
                 <div class="load-title">Low Load</div>
-                <div class="load-desc">1 Core <br> 5 Seconds</div>
+                <div class="load-desc">1 Core · 5s · intensity 1×</div>
             </div>
-            <div class="load-card med" onclick="startLoad(2, 10)">
+            <div class="load-card med" onclick="startLoad(4, 25, 8)">
                 <div class="load-title">Medium Load</div>
-                <div class="load-desc">2 Cores <br> 10 Seconds</div>
+                <div class="load-desc">4 Cores · 25s · intensity 8×</div>
             </div>
-            <div class="load-card high" onclick="startLoad(0, 15)">
+            <div class="load-card high" onclick="startLoad(0, 40, 20)">
                 <div class="load-title">MAX LOAD</div>
-                <div class="load-desc">ALL Cores <br> 15 Seconds</div>
+                <div class="load-desc">ALL Cores · 40s · intensity 20×</div>
             </div>
         </div>
         <div id="status"></div>
@@ -105,15 +105,16 @@
 
     <script>
         // Clean JS function using moderne fetch()
-        function startLoad(cores, duration) {
+        function startLoad(cores, duration, intensity) {
             const statusDiv = document.getElementById('status');
-            statusDiv.innerText = `Starting load on ${cores === 0 ? 'ALL' : cores} cores...`;
+            const inten = intensity != null ? intensity : 1;
+            statusDiv.innerText = `Starting load on ${cores === 0 ? 'ALL' : cores} cores (intensity ×${inten})...`;
             statusDiv.style.display = 'block';
 
             fetch('/start', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({cores: cores, duration: duration})
+                body: JSON.stringify({cores: cores, duration: duration, intensity: inten})
             }).then(res => res.json()).then(data => {
                 statusDiv.innerText = data.status;
             }).catch(err => {
