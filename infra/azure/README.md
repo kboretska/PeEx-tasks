@@ -1,13 +1,40 @@
 # Azure infrastructure (Terraform)
 
-This directory provisions a minimal application environment in **Microsoft Azure**: resource group, virtual network and subnet, network security group (SSH + app port), Ubuntu 22.04 VM with public IP, managed OS disk, and a storage account with a private blob container for artifacts or data. The VM is prepared via **cloud-init** to install **Docker** so you can run the PeEx-tasks Flask app from this repository.
+This folder defines a minimal **Microsoft Azure** environment for the **PeEx-tasks** app: resource group, VNet + subnet, NSG (SSH + app port), Ubuntu 22.04 VM with public IP, managed OS disk, and a storage account with a **private** blob container. **cloud-init** installs **Docker** on first boot so you can run the Flask app from a container (manually or via GitHub Actions).
+
+**Related docs:** repository root [`README.md`](../../README.md), [`CONTRIBUTING.md`](../../CONTRIBUTING.md).
+
+---
+
+## Terraform directory layout
+
+All IaC for this stack lives under `infra/azure/terraform/`:
+
+| File / path | Purpose |
+|-------------|---------|
+| `versions.tf` | Terraform and provider version constraints |
+| `providers.tf` | `azurerm` provider block |
+| `main.tf` | Resource group, shared tags (`local.common_tags`) |
+| `networking.tf` | VNet, subnet, NSG + rules, public IP, NIC |
+| `compute.tf` | Linux VM, SSH key, optional `custom_data` from cloud-init |
+| `storage.tf` | Storage account (unique name suffix), blob container `appdata` |
+| `variables.tf` | Input variables (region, sizing, network, security, storage) |
+| `outputs.tf` | IPs, IDs, SSH hint, app URL, storage names |
+| `templates/cloud-init.yaml.tpl` | Docker + git on first boot (when `enable_docker_cloud_init = true`) |
+| `terraform.tfvars.example` | Safe template — copy to `terraform.tfvars` (not committed) |
+| `backend.tf.example` | Optional remote state — copy to `backend.tf` if needed |
+| `.terraform.lock.hcl` | **Commit this** — pins provider versions for reproducible `init` |
+
+Do **not** commit: `terraform.tfstate`, `*.tfstate.*`, `terraform.tfvars`, `tfplan`, `.terraform/`.
+
+---
 
 ## Architecture
 
 ```mermaid
 flowchart TB
   subgraph Internet
-    User[User / browser]
+    User[User / browser / CI]
   end
 
   subgraph rg["Resource group"]
@@ -29,52 +56,49 @@ flowchart TB
   VM -. optional artifacts .-> BLOB
 ```
 
-- **Network**: One VNet (`address_space`, default `10.42.0.0/16`) and one subnet (`10.42.1.0/24`).
-- **Security**: NSG on the subnet allows inbound TCP **22** (SSH) and **5000** (Flask app). Source ranges are configurable (restrict SSH in production).
-- **Compute**: Single Linux VM (`Standard_B2s` by default), system-assigned managed identity, SSH key authentication only (no password).
-- **Storage**: General-purpose v2 storage account (LRS by default), private container `appdata`, TLS 1.2 minimum, HTTPS-only, soft-delete retention on blobs.
+- **Network:** one VNet (`address_space`, default `10.42.0.0/16`) and one subnet (`10.42.1.0/24`).
+- **Security:** NSG on the subnet — inbound TCP **22** (SSH) and **5000** (app). Source CIDRs are variables (`admin_source_address_prefix`, `app_source_address_prefix`); tighten for production.
+- **Compute:** one Linux VM (`Standard_B2s` by default), system-assigned managed identity, **SSH public key only** (no password).
+- **Storage:** GPv2-style account (`account_tier` Standard/Premium, `access_tier` Hot/Cool for Standard), private container `appdata`, TLS 1.2, HTTPS-only, blob soft delete.
+
+---
 
 ## Prerequisites
 
-- An Azure subscription and permission to create resource groups and resources.
-- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli) installed and signed in:
-
-  ```bash
-  az login
-  az account set --subscription "<subscription-id-or-name>"
-  ```
-
+- Azure subscription and rights to create resource groups and resources.
+- [Azure CLI](https://learn.microsoft.com/en-us/cli/azure/install-azure-cli): `az login`, then `az account set --subscription "<id-or-name>"`.
 - [Terraform](https://developer.hashicorp.com/terraform/install) `>= 1.5`.
-- An **RSA SSH public key** (`ssh-rsa ...`). Azure Linux VMs do **not** accept Ed25519 for `admin_ssh_key`; generate with `ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa`. Do not commit private keys or real `terraform.tfvars` with secrets.
+- **RSA** SSH public key (`ssh-rsa ...`). Azure does **not** use Ed25519 for `admin_ssh_key` on this VM resource. Example:  
+  `ssh-keygen -t rsa -b 4096 -f ~/.ssh/id_rsa_azure`
+
+---
 
 ## Configuration (no secrets in Git)
 
-1. Copy the example variables file:
+```bash
+cd infra/azure/terraform
+cp terraform.tfvars.example terraform.tfvars
+```
 
-   ```bash
-   cd infra/azure/terraform
-   cp terraform.tfvars.example terraform.tfvars
-   ```
+Edit `terraform.tfvars` — at minimum set `ssh_public_key` to one line from your `*.pub` file.
 
-2. Edit `terraform.tfvars` and set at least `ssh_public_key` to your **public** key line.
+**Without a tfvars file** (Linux/macOS):
 
-   Alternatively, without a `tfvars` file:
+```bash
+export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa_azure.pub)"
+```
 
-   **Linux / macOS**
+**Windows PowerShell:**
 
-   ```bash
-   export TF_VAR_ssh_public_key="$(cat ~/.ssh/id_rsa.pub)"
-   ```
+```powershell
+$env:TF_VAR_ssh_public_key = Get-Content $env:USERPROFILE\.ssh\id_rsa_azure.pub -Raw
+```
 
-   **Windows PowerShell**
+Review `variables.tf` for region, VM size, CIDRs, NSG sources, `app_port`, storage options.
 
-   ```powershell
-   $env:TF_VAR_ssh_public_key = Get-Content $env:USERPROFILE\.ssh\id_rsa.pub -Raw
-   ```
+---
 
-3. Review optional variables in `variables.tf` (region, VM size, CIDRs, NSG source prefixes, app port).
-
-## Deploy (single command)
+## Deploy
 
 From `infra/azure/terraform`:
 
@@ -84,118 +108,137 @@ terraform plan -out=tfplan
 terraform apply tfplan
 ```
 
-Or non-interactive:
+Or:
 
 ```bash
 terraform apply -auto-approve
 ```
 
-After apply, read connection details:
+After apply:
 
 ```bash
 terraform output
+terraform output -raw vm_public_ip
 ```
 
-Use `terraform output -raw vm_public_ip` for scripts. Open the app in a browser: `http://<vm_public_ip>:5000` after you deploy the container on the VM (see below).
+Open the UI after the container runs: `http://<vm_public_ip>:5000` (see below or use CI).
 
-## Destroy (single command)
+---
+
+## Destroy
 
 ```bash
 terraform destroy -auto-approve
 ```
 
-Or:
+Or: `terraform plan -destroy -out=destroy.tfplan` then `terraform apply destroy.tfplan`.  
+Confirm subscription and resource group before destroying.
+
+---
+
+## SSH to the VM
+
+Use the **private** key that matches the **public** key in `terraform.tfvars`:
 
 ```bash
-terraform plan -destroy -out=destroy.tfplan
-terraform apply destroy.tfplan
+chmod 600 ~/.ssh/id_rsa_azure
+ssh -i ~/.ssh/id_rsa_azure azureuser@$(terraform output -raw vm_public_ip)
 ```
 
-This removes the resource group and all nested resources. Confirm you are in the correct subscription before destroying.
+If `docker` fails with permission errors, use `sudo docker` or re-login after cloud-init adds `azureuser` to the `docker` group.
 
-## Deploying the PeEx-tasks app on the VM
-
-After `terraform apply`, SSH using the output `ssh_command` or:
+### Manual app on the VM (without CI)
 
 ```bash
-ssh -i ~/.ssh/id_rsa azureuser@<vm_public_ip>
-```
-
-On first boot, cloud-init installs Docker. Log out and back in if `docker` reports permission errors (user was added to the `docker` group), or use `sudo docker`.
-
-Example:
-
-```bash
-git clone <your-fork-or-repo-url> PeEx-tasks
+git clone https://github.com/<your-org>/PeEx-tasks.git
 cd PeEx-tasks
 docker build -t peex-app .
-docker run -d --name peex -p 5000:5000 peex-app
+docker run -d --name peex-app -p 5000:5000 peex-app
 ```
 
-Then browse to `http://<vm_public_ip>:5000`.
+---
 
-## CI/CD: auto-deploy from GitHub to the Azure VM
+## CI/CD: GitHub Actions → Azure VM
 
-The workflow `.github/workflows/cicd.yml` builds the image, pushes it to **GHCR** (`ghcr.io/<owner>/<repo>` in lowercase), then SSHs into the VM, runs `docker pull`, and starts container **`peex-app`** on port **5000**.
+Workflow: [`.github/workflows/cicd.yml`](../../.github/workflows/cicd.yml).
 
-1. In the GitHub repo: **Settings → Environments → New environment** named **`azure`**.
-2. Add **Environment secrets** (not repository secrets, unless you change the workflow):
-   - **`AZURE_VM_HOST`** — публічна IP-адреса ВМ (наприклад з `terraform output -raw vm_public_ip`).
-   - **`AZURE_SSH_PRIVATE_KEY`** — повний вміст **приватного** RSA-ключа (той самий, що пара до ключа в `terraform.tfvars`). У GitHub: вставити багаторядковий ключ цілком; має починатися з `-----BEGIN ... PRIVATE KEY-----`.
-3. На ВМ має бути Docker і доступ по SSH для `azureuser` (як після Terraform + cloud-init). Перший деплой: переконайся, що `sudo docker` працює без інтерактивних питань.
-4. **GHCR**: після першого успішного `push` на `main` з’явиться пакет. Якщо образ **приватний** і `docker pull` на ВМ падає на авторизації, створи PAT з правом `read:packages` і додай секрет **`GHCR_READ_TOKEN`** в environment `azure`. Інакше workflow використовує `GITHUB_TOKEN` (зазвичай достатньо для того самого репозиторію).
+On **push to `main`** (after merge, if `main` is branch-protected): build → push image to **GHCR** at `ghcr.io/<owner>/<repo>` (lowercase) → SSH to VM → `docker pull` → run container **`peex-app`** on port **5000** → smoke test `/health`.
 
-Після кожного push у `main` (після проходження тестів) образ оновлюється на ВМ; перевірка **`smoke-test-azure`** викликає `http://<AZURE_VM_HOST>:5000/health`.
+### Repository settings
+
+1. **Branch protection:** changes usually go through **feature branches** (e.g. `feature/azure-infra-ci`) and **Pull Request** into `main`; required check **Validate, Lint and Test** must pass before merge.
+2. **Environment `azure`:** **Settings → Environments → New environment** → name **`azure`**.
+3. **Environment secrets** (for jobs that use `environment: azure`):
+
+   | Secret | Description |
+   |--------|-------------|
+   | `AZURE_VM_HOST` | Public IP of the VM (`terraform output -raw vm_public_ip`). |
+   | `AZURE_SSH_PRIVATE_KEY` | Full **private** RSA key (multiline PEM / OpenSSH), matching the public key on the VM. |
+   | `GHCR_READ_TOKEN` | Optional PAT with `read:packages` if `docker pull` on the VM fails with auth errors. |
+
+4. The deploy script uses **`sudo docker`**. Cloud-init should leave Docker running; the private key in GitHub must parse correctly (see troubleshooting).
+
+---
 
 ## Configurable variables (summary)
 
 | Variable | Purpose |
 |----------|---------|
 | `location` | Azure region |
-| `name_prefix` | Prefix for resource names |
-| `environment`, `project_name`, `cost_center` | Tags |
+| `name_prefix` | Resource name prefix (validated format) |
+| `environment`, `project_name`, `repository_label`, `cost_center` | Tags |
 | `address_space`, `subnet_prefixes` | VNet / subnet CIDRs |
-| `vm_size` | VM SKU |
-| `os_disk_size_gb` | OS disk size |
-| `ssh_public_key` | **Required** public key for `admin_username` |
-| `admin_source_address_prefix` | Who may SSH (e.g. your `/32`) |
-| `app_port`, `app_source_address_prefix` | App listen port and who may reach it |
-| `enable_docker_cloud_init` | Install Docker on first boot |
-| `storage_account_tier` (Standard/Premium), `storage_access_tier` (Hot/Cool), `storage_replication_type` | Blob storage options |
+| `vm_size`, `os_disk_size_gb` | VM SKU and OS disk |
+| `ssh_public_key` | **Required** RSA public key for `admin_username` |
+| `admin_username` | Linux admin user (default `azureuser`) |
+| `admin_source_address_prefix`, `app_source_address_prefix` | NSG source for SSH / app port |
+| `app_port` | Exposed app port (default `5000`) |
+| `enable_docker_cloud_init` | Install Docker via cloud-init |
+| `storage_account_tier`, `storage_access_tier`, `storage_replication_type` | Storage account options |
 
-Full descriptions and defaults are in `variables.tf`.
+Details and defaults: `variables.tf`.
+
+---
 
 ## Outputs
 
-Notable outputs: `vm_public_ip`, `vm_private_ip`, `ssh_command`, `app_url`, `storage_account_name`, `storage_container_name`, `virtual_network_id`.
+`vm_public_ip`, `vm_private_ip`, `ssh_command`, `app_url`, `storage_account_name`, `storage_container_name`, `virtual_network_id`, `resource_group_name`, etc. — see `outputs.tf`.
+
+---
 
 ## Remote state (optional)
 
-For teams, copy `backend.tf.example` to `backend.tf`, create an Azure Storage account and container for Terraform state, then `terraform init -migrate-state`. Never commit `backend.tf` with secrets; use variables or CI variables.
+Copy `backend.tf.example` to `backend.tf`, provision a storage account + container for state, then `terraform init -migrate-state`. Do not commit secrets in `backend.tf`.
+
+---
 
 ## Troubleshooting
 
-- **`ssh-ed25519 SSH key is not supported`** — Replace the key in `terraform.tfvars` with an RSA public key (`ssh-keygen -t rsa -b 4096`, then use the contents of `~/.ssh/id_rsa.pub`).
-- **`expected account_tier to be one of ["Premium" "Standard"], got Hot`** — Use `storage_account_tier = "Standard"` and set Hot/Cool via `storage_access_tier` (fixed in current `variables.tf` / `storage.tf`).
-- **`Error: building account: could not acquire access token`** — Run `az login` and set the correct subscription.
-- **`ssh_public_key` not set** — Export `TF_VAR_ssh_public_key` or define it in a gitignored `terraform.tfvars`.
-- **SSH works but app URL does not** — Ensure the container maps `-p 5000:5000` and NSG allows your client IP if you changed `app_source_address_prefix`.
-- **Storage account name already taken** — Names are global; change `name_prefix` or apply again (a random suffix is appended).
-- **`terraform plan` wants to replace the VM** — Avoid changing `custom_data` after creation (forces replacement). For production, use image building or configuration management instead of editing `custom_data` in place.
+| Issue | What to do |
+|-------|------------|
+| **Ed25519 not supported** | Use RSA: `ssh-keygen -t rsa -b 4096`; put `ssh-rsa ...` in `terraform.tfvars`. |
+| **`account_tier` vs Hot/Cool** | `account_tier` = `Standard` or `Premium`; Hot/Cool = `storage_access_tier` (see `storage.tf`). |
+| **Azure auth errors** | `az login`, correct `az account set`. |
+| **`ssh_public_key` unset** | `terraform.tfvars` or `TF_VAR_ssh_public_key`. |
+| **`ssh.ParsePrivateKey: no key found` in CI** | `AZURE_SSH_PRIVATE_KEY` must be the **full private** key with newlines, not the `.pub` file; avoid passphrase-protected keys for Actions unless you use a different approach. |
+| **App URL does not load** | Container must publish `-p 5000:5000`; NSG must allow your client if you restricted `app_source_address_prefix`. |
+| **Storage account name taken** | Change `name_prefix` or re-apply (random suffix helps). |
+| **VM planned for replacement** | Changing `custom_data` forces replacement; avoid casual edits after first deploy. |
+| **Slow `terraform plan`** | First run or API refresh; try `TF_LOG=INFO`; check network/VPN. |
 
-## Acceptance checklist (task mapping)
+---
 
-- [x] VNet + subnet(s) — `networking.tf`
-- [x] At least one compute instance — `compute.tf`
-- [x] Storage — `storage.tf` (account + private container)
-- [x] NSG / firewall rules — SSH + app port
-- [x] Single command create — `terraform apply`
-- [x] Single command destroy — `terraform destroy`
-- [x] Variables for region, sizing, network — `variables.tf`
-- [x] Modular layout — separate `*.tf` files
+## IaC acceptance checklist (course mapping)
+
+- [x] VNet + subnet — `networking.tf`
+- [x] Compute — `compute.tf`
+- [x] Storage — `storage.tf`
+- [x] NSG — `networking.tf`
+- [x] Create / destroy — `terraform apply` / `terraform destroy`
+- [x] Variables — `variables.tf`
+- [x] Modular `*.tf` files
 - [x] Outputs — `outputs.tf`
-- [x] Tagging — `local.common_tags`
-- [x] No embedded secrets — SSH via env or gitignored tfvars
-- [x] Documentation — this file
+- [x] Resource tags — `local.common_tags`
+- [x] No secrets in repo — `terraform.tfvars` gitignored; example file only
 
-Capture **screenshots** of `terraform plan`, `terraform apply`, Azure Portal resource group, and `terraform destroy` for your submission, as required by the task.
+For submissions, capture **terminal or screenshots** of `terraform plan`, `terraform apply`, resources in Azure Portal, `terraform output`, and (if required) `terraform destroy`.
