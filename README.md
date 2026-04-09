@@ -1,174 +1,116 @@
 # PeEx-tasks
 
-Flask **Server Load Simulator**: a small web UI and API for synthetic CPU load (useful for demos and infrastructure testing). This repository includes a full **CI/CD** pipeline on GitHub Actions: build, tests, Docker image publishing to **GitHub Container Registry (GHCR)**, and sequential deployment to **Development** and **Production**.
+Flask **Server Load Simulator** (web UI + API for synthetic CPU load) with **Infrastructure as Code** on **Microsoft Azure** (Terraform) and **CI/CD** on **GitHub Actions** (tests, Docker build, **GHCR** publish, deploy to an **Azure VM**).
 
 ---
 
-## Contents
+## Repository structure
 
-- [CI/CD architecture](#cicd-architecture)
-- [Pipeline stages](#pipeline-stages)
-- [Triggers](#triggers)
-- [Environments and promotion](#environments-and-promotion)
-- [Secrets and configuration](#secrets-and-configuration)
-- [Artifact versioning](#artifact-versioning)
-- [Local development](#local-development)
+Logical layout for collaboration and auditing (IaC separated from application code):
+
+| Path | Purpose |
+|------|---------|
+| `app_web.py`, `app.py` | Flask entrypoints |
+| `templates/` | HTML UI |
+| `tests/` | Pytest |
+| `Dockerfile`, `requirements.txt`, `.dockerignore` | Container image |
+| `.github/workflows/cicd.yml` | CI/CD pipeline |
+| `infra/azure/terraform/` | Terraform: resource group, VNet, subnet, NSG, VM, storage (`*.tf`, `templates/`, `terraform.tfvars.example`) |
+| `infra/azure/README.md` | Azure architecture, deploy/destroy, variables, troubleshooting, CI secrets |
+| `CONTRIBUTING.md` | **Branching**, **conventional commits**, **releases (semver tags)**, secrets policy, clone-and-run |
+| `.gitignore` | Python, Terraform state/plans, local `*.tfvars`, tooling noise |
+
+```text
+PeEx-tasks/
+├── .github/workflows/
+├── infra/azure/
+│   ├── README.md
+│   └── terraform/
+│       ├── *.tf
+│       ├── templates/
+│       ├── terraform.tfvars.example
+│       └── .terraform.lock.hcl   # commit this; do not commit .terraform/ or *.tfstate
+├── templates/
+├── tests/
+├── app_web.py
+├── Dockerfile
+├── requirements.txt
+├── CONTRIBUTING.md
+└── README.md
+```
 
 ---
 
-## CI/CD architecture
+## Quick start
 
-End-to-end flow from commit to production: GitHub hosts the source, Actions runs checks and builds, images are stored in GHCR, and deployment targets VMs (e.g. EC2) over SSH with Docker.
+### Application (local)
+
+```bash
+git clone https://github.com/<your-org>/PeEx-tasks.git
+cd PeEx-tasks
+python -m venv .venv
+# Windows: .venv\Scripts\activate
+# Linux/macOS: source .venv/bin/activate
+pip install -r requirements.txt
+set PYTHONPATH=.    # Windows; Linux/macOS: export PYTHONPATH=.
+pytest -v
+python app_web.py   # http://127.0.0.1:5000
+```
+
+### Infrastructure (Terraform on Azure)
+
+See **`infra/azure/README.md`**: prerequisites (`az`, `terraform`), `terraform.tfvars` from `terraform.tfvars.example`, `terraform init && plan && apply`, and `terraform destroy`.
+
+---
+
+## Version control and releases
+
+- **Branches:** feature work on `feature/*` (or `fix/*`), merge to **`main`** via **Pull Request** (see **`CONTRIBUTING.md`**).
+- **Commits:** prefer **conventional** messages (`feat:`, `fix:`, `infra:`, `docs:`, `ci:`).
+- **Releases:** tag stable points with **semantic versioning**, e.g. **`v1.0.0`** (`git tag -a v1.0.0 -m "..." && git push origin v1.0.0`).
+
+---
+
+## CI/CD (summary)
+
+File: [`.github/workflows/cicd.yml`](.github/workflows/cicd.yml).
+
+| Trigger | Jobs |
+|---------|------|
+| **Pull request** to `main` | **Validate, Lint and Test** (flake8, pytest, validation `docker build`) |
+| **Push** to `main` | validate → build & push image to **GHCR** (`ghcr.io/<owner>/<repo>` lowercase) → **Deploy to Azure VM** (SSH, `docker pull` / `run`) → **smoke test** `http://<VM>:5000/health` |
+
+**GitHub:** create environment **`azure`** with secrets **`AZURE_VM_HOST`**, **`AZURE_SSH_PRIVATE_KEY`** (optional **`GHCR_READ_TOKEN`**). Details: `infra/azure/README.md` (section CI/CD).
 
 ```mermaid
 flowchart LR
-  subgraph repo["GitHub repository"]
-    A[Source + workflow YAML]
-  end
-
-  subgraph gha["GitHub Actions"]
-    V[Validate: lint, test, docker build]
-    B[Build and push]
-  end
-
-  subgraph registry["GHCR"]
-    R["Images :latest and :SHA"]
-  end
-
-  subgraph dev["Development"]
-    D[Docker on Dev VM]
-    SD[Smoke /health :5000]
-  end
-
-  subgraph prod["Production"]
-    P[Docker on Prod VM]
-    SP[Smoke /health :80]
-  end
-
-  A --> V
-  V --> B
-  B --> R
-  R --> D
-  D --> SD
-  SD --> P
-  P --> SP
+  PR[PR to main] --> V[Validate]
+  M[Merge push] --> V
+  V --> B[Build and push GHCR]
+  B --> D[Deploy Azure VM]
+  D --> S[Smoke /health]
 ```
 
-Job order on **push to `main`** (simplified):
+---
 
-```mermaid
-flowchart TD
-  validate[validate]
-  build[build-and-push]
-  dev[deploy-dev]
-  smokeD[smoke-test-dev]
-  prod[deploy-prod]
-  smokeP[smoke-test-prod]
+## Security
 
-  validate --> build
-  build --> dev
-  dev --> smokeD
-  build --> prod
-  smokeD --> prod
-  prod --> smokeP
-```
-
-> **Note:** `deploy-prod` requires both a successful `build-and-push` and a successful `smoke-test-dev`, so production is not deployed until Dev is healthy.
+- **Never commit** Terraform state, `terraform.tfvars`, private keys, or tokens. `.gitignore` excludes common Terraform and Python artifacts; see **`CONTRIBUTING.md`**.
+- **Commit** `.terraform.lock.hcl` for reproducible provider versions.
 
 ---
 
-## Pipeline stages
+## Documentation index
 
-Configuration file: [`.github/workflows/cicd.yml`](.github/workflows/cicd.yml).
-
-| Step | Job | Description |
-|------|-----|-------------|
-| 1 | **validate** | Checkout, Python 3.10, `pip install -r requirements.txt`, install flake8 and pytest, **flake8** (critical errors), **pytest**, validation **docker build** (local tag `peex-tasks:test`) |
-| 2 | **build-and-push** | Only on **push** to `main`, after a successful validate. Log in to **GHCR**, build the image, push `latest` and `${GITHUB_SHA}` |
-| 3 | **deploy-dev** | SSH to the Dev host, `docker login` to GHCR, `pull` the image by SHA, restart container `load-app-dev`, port **5000→5000** |
-| 4 | **smoke-test-dev** | `curl` to `http://<DEV_IP>:5000/health` |
-| 5 | **deploy-prod** | SSH to Prod, same pull/run pattern, container `load-app-prod`, port **80→5000** |
-| 6 | **smoke-test-prod** | `curl` to `http://<PROD_IP>/health` |
-
-If any job fails, downstream jobs do not run (**fail fast** via `needs` dependencies).
+| Document | Content |
+|----------|---------|
+| **README.md** (this file) | Purpose, structure, quick start, CI summary |
+| **CONTRIBUTING.md** | Branching, commits, semver tags, PR checklist, clone+IaC |
+| **docs/devops-version-control.md** | Assignment checklist: screenshots, tag command, criteria mapping |
+| **infra/azure/README.md** | Azure architecture diagram, Terraform usage, CI secrets |
 
 ---
 
-## Triggers
+## License / course use
 
-| Event | What runs |
-|-------|-----------|
-| **Pull request** targeting `main` | **validate** only (lint, tests, validation docker build). Deploy and registry push are **not** started (`if: github.event_name == 'push'` on those jobs). |
-| **Push** to `main` | Full path: validate → build-and-push → deploy-dev → smoke-test-dev → deploy-prod → smoke-test-prod. |
-
-Changes are validated on PRs; publishing the image and deploying environments happens only after merge to `main`.
-
----
-
-## Environments and promotion
-
-| Environment | GitHub Environment | App URL pattern | Container |
-|-------------|-------------------|-----------------|-----------|
-| **Development** | `development` | HTTP on port **5000** (e.g. `http://<DEV_IP>:5000`) | `load-app-dev` |
-| **Production** | `production` | HTTP on port **80** (e.g. `http://<PROD_IP>/`) | `load-app-prod` |
-
-**Promotion (Dev → Prod):** the same image (commit tag `${GITHUB_SHA}`) is deployed to Dev first; after **smoke-test-dev** succeeds, **deploy-prod** may run. Production **depends** on a successful Dev smoke test, so promotion is enforced by the workflow graph.
-
-**Approval (manual vs automatic):** deploy jobs use `environment: development` and `environment: production`. In **Settings → Environments**, you can enable **Required reviewers** or a **Wait timer** for **production** (and optionally **development**) so jobs wait for manual approval in the GitHub UI. With no protection rules, stages proceed **automatically** after the previous steps succeed.
-
----
-
-## Secrets and configuration
-
-Sensitive values are **not** committed; use **GitHub Secrets** (and environment variables where appropriate):
-
-| Secret | Purpose |
-|--------|---------|
-| `AWS_DEV_IP` | Public IP of the Dev instance (deploy and smoke test) |
-| `AWS_PROD_IP` | Public IP of the Prod instance |
-| `AWS_SSH_KEY` | Private SSH key for user `ubuntu` on both servers |
-| `GITHUB_TOKEN` | Provided by Actions; used in deploy scripts for `docker login ghcr.io` |
-
-The `build-and-push` job also uses `GITHUB_TOKEN` on the runner with `packages: write` to push to GHCR.
-
----
-
-## Artifact versioning
-
-- **Registry:** `ghcr.io/kboretska/peex-tasks` (set via `IMAGE_NAME` in the workflow).
-- **Tags:** `latest` and **`${GITHUB_SHA}`** — the image is traceable to the commit on `main`.
-- If you change `IMAGE_NAME` or the registry owner, update `.github/workflows/cicd.yml` accordingly.
-
----
-
-## Local development
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate   # Windows
-pip install -r requirements.txt
-set PYTHONPATH=.
-pytest -v
-python app_web.py
-```
-
-The app listens on `0.0.0.0:5000`. Build and run the image locally:
-
-```bash
-docker build -t peex-tasks:local .
-docker run -p 5000:5000 peex-tasks:local
-```
-
-On Linux or macOS, use `source .venv/bin/activate` and `export PYTHONPATH=.` instead of the Windows lines above.
-
----
-
-## Repository layout (summary)
-
-| Path | Description |
-|------|-------------|
-| `app_web.py` | Flask entrypoint (used by Docker and tests) |
-| `templates/index.html` | Web UI for the load simulator |
-| `tests/test_app.py` | Pytest coverage for routes |
-| `Dockerfile` | Python 3.10 slim image, `CMD` runs `app_web.py` |
-| `.github/workflows/cicd.yml` | Full CI/CD workflow |
+Use and adapt for coursework; keep sensitive data out of Git.
