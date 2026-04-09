@@ -36,6 +36,20 @@ MANIFEST
 pip-log.txt
 pip-delete-this-directory.txt
 
+# Terraform
+**/.terraform/
+**/terraform.tfstate
+**/terraform.tfstate.*
+**/tfplan
+**/*.tfplan
+**/crash.log
+**/override.tf
+**/*.auto.tfvars
+*.tfvars
+!**/terraform.tfvars.example
+.terraformrc
+terraform.rc
+
 # Unit test / coverage reports
 htmlcov/
 .tox/
@@ -205,23 +219,3 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
-
-# --- Never commit keys / dropped credentials (defense in depth) ---
-/id_rsa
-/id_ed25519
-*.pem
-secrets/
-
-# Terraform
-**/.terraform/
-**/terraform.tfstate
-**/terraform.tfstate.*
-**/tfplan
-**/*.tfplan
-**/crash.log
-**/override.tf
-**/*.auto.tfvars
-*.tfvars
-!**/terraform.tfvars.example
-.terraformrc
-terraform.rc
