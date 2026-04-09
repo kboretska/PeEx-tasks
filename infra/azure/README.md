@@ -27,6 +27,22 @@ All IaC for this stack lives under `infra/azure/terraform/`:
 
 Do **not** commit: `terraform.tfstate`, `*.tfstate.*`, `terraform.tfvars`, `tfplan`, `.terraform/`.
 
+### Layout, modularity, and Terraform best practices
+
+This stack follows common **root-module** conventions recommended for Terraform:
+
+| Practice | How it is applied here |
+|----------|-------------------------|
+| **Separation by concern** | Networking (`networking.tf`), compute (`compute.tf`), and storage (`storage.tf`) are isolated so each file maps to one domain; changes stay localized and reviews are easier. |
+| **Configurable inputs** | All tunable values (region, sizing, CIDRs, NSG sources, storage tiers) live in `variables.tf`, not hard-coded in resources. |
+| **Explicit outputs** | `outputs.tf` exposes connection and resource identifiers for operators, scripts, and documentation—no need to read state by hand. |
+| **Provider and version pinning** | `versions.tf` and committed `.terraform.lock.hcl` keep provider versions reproducible across machines and CI. |
+| **Secrets outside VCS** | Real values use `terraform.tfvars` (ignored) or environment variables; `terraform.tfvars.example` documents shape without secrets. |
+| **External templates** | `templates/cloud-init.yaml.tpl` keeps VM bootstrap logic out of long HCL strings and allows `templatefile()` reuse. |
+| **Optional remote state** | `backend.tf.example` documents moving state to shared storage for teams without forcing it on solo use. |
+
+**Modularity** here is implemented as a **single root module split into logical `.tf` files** (HashiCorp’s usual pattern for small/medium stacks). That satisfies “modular and organized” for coursework and many production repos. **Nested `module` blocks** (e.g. `modules/network`) become worthwhile when you reuse the same block across environments or repositories; this project stays readable without that extra layer until duplication appears.
+
 ---
 
 ## Architecture
